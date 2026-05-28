@@ -1,1 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>100k Pixel Canvas</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #1a1a1a;
+            color: #fff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+        }
 
+        #ui-panel {
+            background: rgba(30, 30, 30, 0.85);
+            padding: 10px 20px;
+            border-radius: 0 0 10px 10px;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            z-index: 10;
+            backdrop-filter: blur(5px);
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        input[type="color"] {
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            background: none;
+        }
+
+        #timer {
+            font-size: 1.2rem;
+            font-weight: bold;
+            min-width: 120px;
+            text-align: center;
+            padding: 5px 10px;
+            border-radius: 5px;
+            background: #2a2a2a;
+        }
+
+        .ready { color: #4caf50; border: 1px solid #4caf50; }
+        .waiting { color: #f44336; border: 1px solid #f44336; }
+
+        #canvas-container {
+            flex-grow: 1;
+            width: 100%;
+            position: relative;
+            cursor: grab;
+        }
+
+        #canvas-container:active {
+            cursor: grabbing;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            image-rendering: pixelated;
+        }
+
+        #instructions {
+            position: absolute;
+            bottom: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 8px 15px;
+            border-radius: 5px;
+            font-size: 0.9rem;
+            pointer-events: none;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-panel">
+        <div class="control-group">
+            <label for="colorPicker">Select Color:</label>
+            <input type="color" id="colorPicker" value="#ff0000">
+        </div>
+        <div id="timer" class="ready">READY</div>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="pixelCanvas"></canvas>
+    </div>
+
+    <div id="instructions">
+        Left-Click to Paint | Drag Mouse to Pan | Scroll Wheel to Zoom
+    </div>
+
+    <script>
+        const canvas = document.getElementById('pixelCanvas');
+        const ctx = canvas.getContext('2d');
+        const container = document.getElementById('canvas-container');
+        const colorPicker = document.getElementById('colorPicker');
+        const timerDisplay = document.getElementById('timer');
+
+        // Grid Dimensions (400 * 250 = 100,000 pixels)
+        const GRID_WIDTH = 400;
+        const GRID_HEIGHT = 250;
+        const PIXEL_SIZE = 10; // Base size of one grid square in pixels
+
+        // Game State Matrix (stores colors of all pixels)
+        const gridData = Array(GRID_WIDTH).fill(null).map(() => Array(GRID_HEIGHT).fill('#ffffff'));
+
+        // Camera / Pan & Zoom State
+        let scale = 1;
+        let offsetX = 0;
+        let offsetY = 0;
+        let isDragging = false;
+        let startX, startY;
+
+        // Cooldown State
+        let lastPlacementTime = 0;
+        const COOLDOWN_MS = 1; // 1 second
+
+        // Setup Canvas Size
+        function resizeCanvas() {
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            draw();
+        }
+
+        // Center the grid initially
+        function centerGrid() {
+            offsetX = (canvas.width - (GRID_WIDTH * PIXEL_SIZE * scale)) / 2;
+            offsetY = (canvas.height - (GRID_HEIGHT * PIXEL_SIZE * scale)) / 2;
+        }
+
+        // Render everything
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            ctx.translate(offsetX, offsetY);
+            ctx.scale(scale, scale);
+
+            // Draw grid pixels
+            for (let x = 0; x < GRID_WIDTH; x++) {
+                for (let y = 0; y < GRID_HEIGHT; y++) {
+                    ctx.fillStyle = gridData[x][y];
+                    ctx.fillRect(x * PIXEL_SIZE, y * PIXEL_SIZE, PIXEL_SIZE, PIXEL_SIZE);
+                }
+            }
+
+            // Draw a subtle border around the entire canvas grid
+            ctx.strokeStyle = '#555';
+            ctx.lineWidth = 1 / scale;
+            ctx.strokeRect(0, 0, GRID_WIDTH * PIXEL_SIZE, GRID_HEIGHT * PIXEL_SIZE);
+
+            ctx.restore();
+        }
+
+        // Handle Cooldown UI Updates
+        function updateCooldown() {
+            const now = Date.now();
+            const timePassed = now - lastPlacementTime;
+
+            if (timePassed >= COOLDOWN_MS) {
+                timerDisplay.textContent = "READY";
+                timerDisplay.className = "ready";
+            } else {
+                const remaining = ((COOLDOWN_MS - timePassed) / 1000).toFixed(1);
+                timerDisplay.textContent = `${remaining}s`;
+                timerDisplay.className = "waiting";
+                requestAnimationFrame(updateCooldown);
+            }
+        }
+
+        // Convert Screen Coordinates to Grid Coordinates
+        function screenToGrid(screenX, screenY) {
+            const rect = canvas.getBoundingClientRect();
+            const canvasX = screenX - rect.left;
+            const canvasY = screenY - rect.top;
+
+            const gridX = Math.floor((canvasX - offsetX) / (PIXEL_SIZE * scale));
+            const gridY = Math.floor((canvasY - offsetY) / (PIXEL_SIZE * scale));
+
+            return { x: gridX, y: gridY };
+        }
+
+        // Mouse Down: Start dragging or prepare for click
+        container.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            startX = e.clientX - offsetX;
+            startY = e.clientY - offsetY;
+        });
+
+        // Mouse Move: Pan the canvas if dragging
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            offsetX = e.clientX - startX;
+            offsetY = e.clientY - startY;
+            draw();
+        });
+
+        // Mouse Up: Place pixel only if it was a quick tap/click, not a drag map move
+        window.addEventListener('mouseup', (e) => {
+            if (!isDragging) return;
+            isDragging = false;
+
+            // If the mouse barely moved, treat it as a click action to place a pixel
+            const currentX = e.clientX - offsetX;
+            const currentY = e.clientY - offsetY;
+            const movement = Math.sqrt(Math.pow(currentX - startX, 2) + Math.pow(currentY - startY, 2));
+
+            if (movement < 5) { 
+                attemptPixelPlacement(e.clientX, e.clientY);
+            }
+        });
+
+        function attemptPixelPlacement(screenX, screenY) {
+            const now = Date.now();
+            if (now - lastPlacementTime < COOLDOWN_MS) return; // Still on cooldown
+
+            const gridCoords = screenToGrid(screenX, screenY);
+
+            // Verify click is within bounds of our 100k matrix
+            if (gridCoords.x >= 0 && gridCoords.x < GRID_WIDTH && gridCoords.y >= 0 && gridCoords.y < GRID_HEIGHT) {
+                gridData[gridCoords.x][gridCoords.y] = colorPicker.value;
+                lastPlacementTime = now;
+                updateCooldown();
+                draw();
+            }
+        }
+
+        // Zoom functionality via Mouse Wheel
+        container.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            
+            const zoomFactor = 1.1;
+            let newScale = e.deltaY < 0 ? scale * zoomFactor : scale / zoomFactor;
+            
+            // Cap zooming caps
+            newScale = Math.max(0.2, Math.min(newScale, 20));
+
+            // Zoom toward mouse pointer position
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            offsetX = mouseX - (mouseX - offsetX) * (newScale / scale);
+            offsetY = mouseY - (mouseY - offsetY) * (newScale / scale);
+            scale = newScale;
+
+            draw();
+        }, { passive: false });
+
+        // Initialize setup
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+        centerGrid();
+        draw();
+    </script>
+</body>
+</html>
